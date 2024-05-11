@@ -1,0 +1,26 @@
+{
+	"name": "lekarna/coding-standard",
+	"description": "Set of rules for ECS for lekarna applications",
+	"license": "MIT",
+	"authors": [
+		{ "name": "Matěj Plavina", "email": "matej.plavina@gmail.com", "homepage": "https://lemenio.com" }
+	],
+	"bin": [
+		"bin/generate-ecs-baseline"
+	],
+	"require": {
+		"php": ">=7.2",
+		"symplify/easy-coding-standard": "^12.1",
+		"slevomat/coding-standard": "^8.14",
+      	"ext-json": "*"
+    },
+	"scripts": {
+		"ecs": "vendor/bin/ecs --config=vendor/lekarna/coding-standard/ecs.php",
+		"ecs-fix": "vendor/bin/ecs --config=vendor/lekarna/coding-standard/ecs.php --fix"
+	},
+	"config": {
+		"allow-plugins": {
+			"dealerdirect/phpcodesniffer-composer-installer": true
+		}
+	}
+}

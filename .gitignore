@@ -1,0 +1,5 @@
+errors.json
+vendor
+.idea
+composer.lock
+temporary-baseline-rules-skip.php

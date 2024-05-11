@@ -1,0 +1,207 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+const EXIT_ERROR_MESSAGE = 'It looks like the baseliner wasn\'t able to generate the baseline correctly, exiting....' . PHP_EOL;
+const BREAKING_AUTOFIXER_RULE_CLASSES = [
+    'SlevomatCodingStandard\Sniffs\TypeHints\ReturnTypeHintSniff',
+    'SlevomatCodingStandard\Sniffs\TypeHints\DeclareStrictTypesSniff',
+    'SlevomatCodingStandard\Sniffs\Commenting\ForbiddenAnnotationsSniff',
+    'SlevomatCodingStandard\Sniffs\TypeHints\ParameterTypeHintSniff',
+    'SlevomatCodingStandard\Sniffs\TypeHints\PropertyTypeHintSniff',
+    'SlevomatCodingStandard\Sniffs\Operators\DisallowEqualOperatorsSniff',
+];
+const MAX_REPEATS = 10;
+
+try {
+    $appendExistingBaseline = false;
+
+    $ecsErrorsFile = getcwd() . '/vendor/lekarna/coding-standard/errors.json';
+    $baseLineFile = getcwd() . '/ecs-baseline.php';
+    $temporaryBaseLineRulesSkipFile = __DIR__ . '/../temporary-baseline-rules-skip.php';
+    $lastKnownErrors = 0;
+    $lastKnownDiffs = 0;
+    $baseline = [];
+    $temporaryBaselineRulesSkip = [];
+    $repeats = 0;
+
+    resetTemporaryBaselineRulesSkipFile($temporaryBaseLineRulesSkipFile);
+    resetBaselineFile($baseLineFile);
+
+    while (true) {
+        if ($appendExistingBaseline && !file_exists($baseLineFile)) {
+            exit('Your baseline is either empty or does not exist, and thus it cannot be appended.' . PHP_EOL);
+        }
+
+        print_r("Generating ECS Baseline: Round {$repeats}" . PHP_EOL);
+
+        exec(sprintf(
+            'vendor/bin/ecs --config=vendor/lekarna/coding-standard/ecs.php --output-format=json > %s',
+            $ecsErrorsFile
+        ));
+
+        if (!file_exists($ecsErrorsFile)) {
+            exit(EXIT_ERROR_MESSAGE);
+        }
+
+        $errors = json_decode(file_get_contents($ecsErrorsFile), true);
+
+        if (!array_key_exists('totals', $errors) || !array_key_exists('errors', $errors['totals'])) {
+            exit(EXIT_ERROR_MESSAGE);
+        }
+
+        $lastKnownErrors = $errors['totals']['errors'];
+        $lastKnownDiffs = $errors['totals']['diffs'];
+
+        if ($lastKnownErrors === 0 && $lastKnownDiffs === 0) {
+            break;
+        }
+
+        if ($appendExistingBaseline) {
+            include $baseLineFile;
+            include $temporaryBaseLineRulesSkipFile;
+
+            $baseline = $baselineErrors;
+
+            resetTemporaryBaselineRulesSkipFile($temporaryBaseLineRulesSkipFile);
+            resetBaselineFile($baseLineFile);
+        }
+
+        foreach ($errors['files'] as $filePath => $fileWithErrors) {
+            if (array_key_exists('errors', $fileWithErrors)) {
+                foreach ($fileWithErrors['errors'] as $errorInFile) {
+                    $errorClass = explode('.', $errorInFile['source_class'])[0];
+                    $errorFilePath = $errorInFile['file_path'];
+
+                    if (!array_key_exists($errorClass, $baseline)) {
+                        $baseline[$errorClass] = [];
+                    }
+
+                    if (!in_array($errorFilePath, $baseline[$errorClass], true)) {
+                        $baseline[$errorClass][] = $errorFilePath;
+                    }
+                }
+            } elseif (array_key_exists('diffs', $fileWithErrors)) {
+                foreach ($fileWithErrors['diffs'] as $diffInFile) {
+                    if (array_key_exists('applied_checkers', $diffInFile)) {
+                        foreach ($diffInFile['applied_checkers'] as $appliedChecker) {
+                            $appliedChecker = str_replace('\\\\', '\\', $appliedChecker);
+                            $explodedChecker = explode('.', $appliedChecker)[0];
+                            $isConsideredAsError = false;
+
+                            foreach (BREAKING_AUTOFIXER_RULE_CLASSES as $breakingAutofixerRuleClass) {
+                                if (str_contains($appliedChecker, $breakingAutofixerRuleClass)) {
+                                    if (!array_key_exists($explodedChecker, $baseline) || !in_array(
+                                            $filePath,
+                                            $baseline[$explodedChecker],
+                                            true
+                                        )) {
+                                        $baseline[$explodedChecker][] = $filePath;
+                                    }
+
+                                    $isConsideredAsError = true;
+                                    break;
+                                }
+
+                                $isConsideredAsError = false;
+                            }
+
+                            if (!in_array($explodedChecker, $temporaryBaselineRulesSkip, true) && !$isConsideredAsError) {
+                                $temporaryBaselineRulesSkip[] = $explodedChecker;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        $repeats++;
+
+        if ($repeats >= MAX_REPEATS) {
+            cleanup();
+            exit('Could not ignore all errors, even though the baseliner was run 5 times, please run fixer manually.' . PHP_EOL);
+        }
+
+        file_put_contents($baseLineFile, getBaselineErrorsAsFormattedString($baseline), FILE_APPEND);
+        file_put_contents($temporaryBaseLineRulesSkipFile, getTemporaryBaselineRulesSkipAsFormattedString($temporaryBaselineRulesSkip), FILE_APPEND);
+
+        $appendExistingBaseline = true;
+    }
+
+    cleanup();
+
+    exit('Successfully generated or regenerated baseline for ECS' . PHP_EOL);
+} catch (Exception $e) {
+    exit('An error occurred: ' . $e->getMessage() . PHP_EOL);
+}
+
+function cleanup(): void
+{
+    global $ecsErrorsFile, $temporaryBaseLineRulesSkipFile;
+    unlink($ecsErrorsFile);
+    unlink($temporaryBaseLineRulesSkipFile);
+}
+
+/***
+ * @param array<string, string[]> $baseline
+ */
+function getBaselineErrorsAsFormattedString(array $baseline): string
+{
+    $formattedBaselineErrorsString = '';
+
+    foreach ($baseline as $baselineErrorClass => $baselineErrorFiles) {
+        $escapedBaselineErrorFiles = array_map(function ($baselineErrorFile) {
+            return "'$baselineErrorFile'";
+        }, $baselineErrorFiles);
+
+        $baselineErrorFiles = implode(',', $escapedBaselineErrorFiles);
+        $formattedBaselineErrorsString .= <<<EOL
+
+\$baselineErrors['$baselineErrorClass'] = [$baselineErrorFiles];
+EOL;
+    }
+
+    return $formattedBaselineErrorsString;
+}
+
+/**
+ * @param string[] $temporaryBaselineRulesSkip
+ */
+function getTemporaryBaselineRulesSkipAsFormattedString(array $temporaryBaselineRulesSkip): string
+{
+    $formattedTemporaryBaseLineRulesSkipString = '';
+
+    foreach ($temporaryBaselineRulesSkip as $temporaryBaselineRuleSkip) {
+        $formattedTemporaryBaseLineRulesSkipString .= <<<EOL
+
+\$temporaryBaselineRulesSkip[] = '$temporaryBaselineRuleSkip';
+EOL;
+    }
+
+    return $formattedTemporaryBaseLineRulesSkipString;
+}
+
+function resetBaselineFile(string $baseLineFile): void
+{
+    file_put_contents(
+        $baseLineFile,
+        <<<EOL
+<?php
+
+\$baselineErrors = [];
+EOL
+    );
+}
+
+function resetTemporaryBaselineRulesSkipFile(string $temporaryBaseLineRulesSkipFile): void
+{
+    file_put_contents(
+        $temporaryBaseLineRulesSkipFile,
+        <<<EOL
+<?php
+
+\$temporaryBaselineRulesSkip = [];
+EOL
+    );
+}
