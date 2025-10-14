@@ -11,7 +11,7 @@
 	"require": {
 		"php": ">=7.2",
 		"symplify/easy-coding-standard": "^12.1",
-		"slevomat/coding-standard": "^8.14",
+		"slevomat/coding-standard": "~8.21.1",
       	"ext-json": "*"
     },
 	"scripts": {
