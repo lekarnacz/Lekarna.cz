@@ -208,4 +208,5 @@ return static function (ECSConfig $ecsConfig) use ($paths, $skips, $rules, $conf
 
     $ecsConfig->indentation(Option::INDENTATION_TAB);
     $ecsConfig->lineEnding(PHP_EOL);
+	$ecsConfig->parallel(300);
 };
