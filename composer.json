@@ -6,21 +6,31 @@
 		{ "name": "Matěj Plavina", "email": "matej.plavina@gmail.com", "homepage": "https://lemenio.com" }
 	],
 	"bin": [
-		"bin/generate-ecs-baseline"
+		"bin/generate-ecs-baseline",
+		"bin/migrate-baseline"
 	],
 	"require": {
 		"php": ">=7.2",
 		"symplify/easy-coding-standard": "^12.1",
 		"slevomat/coding-standard": "~8.21.1",
-      	"ext-json": "*"
-    },
+		"ext-json": "*",
+		"cweagans/composer-patches": "^1.7"
+	},
+	"extra": {
+		"patches": {
+			"symplify/easy-coding-standard": {
+				"Fix look-ahead ignore": "https://raw.githubusercontent.com/lekarnacz/Lekarna.cz/refs/heads/master/patches/symplify-ecs-file.patch"
+			}
+		}
+	},
 	"scripts": {
 		"ecs": "vendor/bin/ecs --config=vendor/lekarna/coding-standard/ecs.php",
 		"ecs-fix": "vendor/bin/ecs --config=vendor/lekarna/coding-standard/ecs.php --fix"
 	},
 	"config": {
 		"allow-plugins": {
-			"dealerdirect/phpcodesniffer-composer-installer": true
+			"dealerdirect/phpcodesniffer-composer-installer": true,
+			"cweagans/composer-patches": true
 		}
 	}
 }

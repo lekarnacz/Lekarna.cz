@@ -1,0 +1,140 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+$baselineFile = getcwd() . '/ecs-baseline.php';
+
+try {
+    if (!file_exists($baselineFile)) {
+        throw new RuntimeException(sprintf('Baseline file not found: %s', $baselineFile));
+    }
+
+    $baselineErrors = [];
+    require $baselineFile;
+
+    if (empty($baselineErrors)) {
+        echo 'No errors found in baseline.' . PHP_EOL;
+        exit(0);
+    }
+
+    $filesToUpdate = groupSniffsByFile($baselineErrors);
+    
+    echo sprintf('Found %d files to update.', count($filesToUpdate)) . PHP_EOL;
+
+    foreach ($filesToUpdate as $relativePath => $sniffs) {
+        updateFileWithSniffs($relativePath, $sniffs);
+    }
+
+    echo 'Done. Please review changes.' . PHP_EOL;
+
+} catch (Throwable $e) {
+    fwrite(STDERR, 'An error occurred: ' . $e->getMessage() . PHP_EOL);
+    exit(1);
+}
+
+/**
+ * @param array<string, array<string>> $baselineErrors
+ * @return array<string, array<string>>
+ */
+function groupSniffsByFile(array $baselineErrors): array
+{
+    $filesToUpdate = [];
+
+    foreach ($baselineErrors as $sniffClass => $files) {
+        $sniffCode = convertClassToSniffCode($sniffClass);
+
+        foreach ($files as $file) {
+            if (!is_string($file)) {
+                continue;
+            }
+            $filesToUpdate[$file][] = $sniffCode;
+        }
+    }
+
+    return $filesToUpdate;
+}
+
+function convertClassToSniffCode(string $className): string
+{
+    $prefix = 'PHP_CodeSniffer\\Standards\\';
+    if (strpos($className, $prefix) === 0) {
+        $className = substr($className, strlen($prefix));
+    }
+
+    $code = str_replace(['\\', '.Sniffs.'], '.', $className);
+
+    if (substr($code, -5) === 'Sniff') {
+        $code = substr($code, 0, -5);
+    }
+
+    return $code;
+}
+
+/**
+ * @param string[] $sniffs
+ */
+function updateFileWithSniffs(string $relativePath, array $sniffs): void
+{
+    $filePath = getcwd() . '/' . $relativePath;
+
+    if (!file_exists($filePath)) {
+        echo sprintf('Warning: File not found %s', $relativePath) . PHP_EOL;
+        return;
+    }
+
+    $content = file_get_contents($filePath);
+    if ($content === false) {
+        throw new RuntimeException(sprintf('Could not read file %s', $filePath));
+    }
+
+    $uniqueSniffs = array_unique($sniffs);
+    sort($uniqueSniffs);
+
+    // Ensure DeclareStrictTypes is always first
+    $declareStrictTypesCode = 'SlevomatCodingStandard.TypeHints.DeclareStrictTypes';
+    if (in_array($declareStrictTypesCode, $uniqueSniffs, true)) {
+        $uniqueSniffs = array_diff($uniqueSniffs, [$declareStrictTypesCode]);
+        array_unshift($uniqueSniffs, $declareStrictTypesCode);
+    }
+
+    $sniffsString = implode(', ', $uniqueSniffs);
+    $disableComment = "// phpcs:disable $sniffsString";
+
+    if (!preg_match('/^<\?php/', $content)) {
+        echo sprintf('Skipping %s (doesn\'t start with <?php)', $relativePath) . PHP_EOL;
+        return;
+    }
+
+    $lines = explode("\n", $content);
+    $insertIndex = 1;
+    $foundDeclare = false;
+
+    foreach ($lines as $i => $line) {
+        if (preg_match('/^\s*declare\s*\(\s*strict_types\s*=\s*1\s*\)\s*;/i', $line)) {
+            $insertIndex = $i + 1;
+            $foundDeclare = true;
+            break;
+        }
+
+        if ($i > 50) {
+            break;
+        }
+    }
+
+    if ($foundDeclare) {
+        array_splice($lines, $insertIndex, 0, ['', $disableComment]);
+        $newContent = implode("\n", $lines);
+    } else {
+        if (trim($lines[0]) === '<?php') {
+            array_splice($lines, 1, 0, ['', $disableComment]);
+            $newContent = implode("\n", $lines);
+        } else {
+            $newContent = preg_replace('/^<\?php(\s*)/', "<?php$1$disableComment\n", $content, 1);
+        }
+    }
+
+    if ($newContent !== null && $newContent !== $content) {
+        file_put_contents($filePath, $newContent);
+    }
+}

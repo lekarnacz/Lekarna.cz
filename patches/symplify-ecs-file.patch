@@ -1,0 +1,105 @@
+diff --git a/src/SniffRunner/ValueObject/File.php b/src/SniffRunner/ValueObject/File.php
+index 160dc2e..bfffaf1 100755
+--- a/src/SniffRunner/ValueObject/File.php
++++ b/src/SniffRunner/ValueObject/File.php
+@@ -78,7 +78,7 @@ final class File extends BaseFile
+         // parent required
+         $this->config = new Config([], \false);
+         $this->config->tabWidth = 4;
+-        $this->config->annotations = \false;
++        $this->config->annotations = \true;
+         $this->config->encoding = 'UTF-8';
+     }
+     /**
+@@ -92,10 +92,43 @@ final class File extends BaseFile
+         $this->sniffMetadataCollector->resetErrors();
+         $this->parse();
+         $this->fixer->startFile($this);
++
++        // patch for look-ahead ignore
++        foreach ($this->tokens as $token) {
++            if ($token['line'] > 20) {
++                break;
++            }
++            if (\strpos($token['content'], 'phpcs:disable') !== \false) {
++                 if (\preg_match('~phpcs:disable\s+(.*?)(\s|\*/|$)~', $token['content'], $matches)) {
++                      $sniffs = \explode(',', $matches[1]);
++                      foreach ($sniffs as $sniffCode) {
++                          $sniffCode = \trim($sniffCode);
++                          if ($sniffCode === '') {
++                              continue;
++                          }
++
++                          for ($i = 1; $i <= $token['line']; $i++) {
++                              if (!isset($this->tokenizer->ignoredLines[$i])) {
++                                  $this->tokenizer->ignoredLines[$i] = [];
++                              }
++                              $this->tokenizer->ignoredLines[$i][$sniffCode] = \true;
++                          }
++                      }
++                 }
++            }
++        }
++
+         $currentFilePath = $this->filePath;
+         if (!\is_string($currentFilePath)) {
+             throw new ShouldNotHappenException();
+         }
++
++        foreach ($this->tokens as $token) {
++            if ($token['code'] === \T_PHPCS_IGNORE_FILE) {
++                return;
++            }
++        }
++
+         foreach ($this->tokens as $stackPtr => $token) {
+             if (!isset($this->tokenListeners[$token['code']])) {
+                 continue;
+@@ -120,6 +153,28 @@ final class File extends BaseFile
+      */
+     public function addFixableError($error, $stackPtr, $code, $data = [], $severity = 0) : bool
+     {
++        $line = $this->tokens[$stackPtr]['line'];
++        if (isset($this->tokenizer->ignoredLines[$line])) {
++            $ignored = $this->tokenizer->ignoredLines[$line];
++            if (isset($ignored['.all'])) {
++                return \false;
++            }
++            $checkCodes = [$code];
++            if ($this->activeSniffClass) {
++                $sniffCode = Common::getSniffCode($this->activeSniffClass);
++                $checkCodes[] = $sniffCode;
++                if (\strpos($code, '.') === \false) {
++                    $checkCodes[] = $sniffCode . '.' . $code;
++                }
++            }
++
++            foreach ($checkCodes as $checkCode) {
++                if (isset($ignored[$checkCode])) {
++                    return \false;
++                }
++            }
++        }
++
+         $fullyQualifiedCode = $this->resolveFullyQualifiedCode($code);
+         $this->sniffMetadataCollector->addAppliedSniff($fullyQualifiedCode);
+         return !$this->shouldSkipError($error, $code, $data);
+@@ -165,6 +220,18 @@ final class File extends BaseFile
+      */
+     protected function addMessage($isError, $message, $line, $column, $sniffClassOrCode, $data, $severity, $isFixable = \false) : bool
+     {
++        if (isset($this->tokenizer->ignoredLines[$line])) {
++            $ignored = $this->tokenizer->ignoredLines[$line];
++            if (isset($ignored[".all"])) return \false;
++            $checkCodes = [$sniffClassOrCode];
++            if ($this->activeSniffClass) {
++                $sniffCode = \PHP_CodeSniffer\Util\Common::getSniffCode($this->activeSniffClass);
++                $checkCodes[] = $sniffCode;
++                if (\strpos($sniffClassOrCode, ".") === \false) $checkCodes[] = $sniffCode . "." . $sniffClassOrCode;
++            }
++            foreach ($checkCodes as $checkCode) { if (isset($ignored[$checkCode])) return \false; }
++        }
++
+         // skip warnings
+         if (!$isError) {
+             return \false;
